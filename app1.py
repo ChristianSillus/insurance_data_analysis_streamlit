@@ -431,10 +431,13 @@ if uploaded_file is not None:
             if 'df_encoded' in st.session_state: del st.session_state['df_encoded']
             st.sidebar.success("Finshed Cleaning")
             st.rerun()
+        
     #----------------------------------------------------------------------
     #--------------Select Target-Variable & gets first stats---------------
     #----------------------------------------------------------------------
     if 'df_final' in st.session_state:
+        if 'df_encoded' not in st.session_state:
+            st.session_state['df_encoded'] = st.session_state['df_final']
         st.sidebar.divider()
         st.sidebar.subheader("Target Variable")
         num_cols = st.session_state['df_final'].select_dtypes(include=['number']).columns.tolist()
