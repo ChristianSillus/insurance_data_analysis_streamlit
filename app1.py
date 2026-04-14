@@ -403,7 +403,7 @@ if uploaded_file is not None:
     else:
         disp = st.session_state['df_raw']
 
-    st.dataframe(disp.head(10), use_container_width=True)
+    st.dataframe(disp.head(10), width='stretch')
     st.caption(f"Dimensions {disp.shape[0]} Rows, {disp.shape[1]} Columns")
     #----------------------------------------------------------------------
     #--------------Decide for relevant columns on sidebar------------------
@@ -500,7 +500,7 @@ if uploaded_file is not None:
         df_for_dist = st.session_state['df_encoded']
         target = st.session_state['selected_target']
 
-        if st.sidebar.button("Find the best Fit", use_container_width=True):
+        if st.sidebar.button("Find the best Fit", width='stretch'):
             data_to_fit = df_for_dist[target] 
         
             best_fit = find_best_distribution1(data_to_fit)
@@ -510,7 +510,7 @@ if uploaded_file is not None:
             else:
                 st.sidebar.error("No Distribution found")
 
-        if st.sidebar.button("Find the best discrete Fit", use_container_width=True):
+        if st.sidebar.button("Find the best discrete Fit", width='stretch'):
             data_to_fit = df_for_dist[target] 
         
             best_fit = find_best_discrete_distribution(data_to_fit)
@@ -530,17 +530,17 @@ if uploaded_file is not None:
     if 'last_analysis' in st.session_state:
         st.sidebar.divider()
         st.sidebar.subheader("Plots")
-        if st.sidebar.button("Plot Histogram and best fit", use_container_width=True):
+        if st.sidebar.button("Plot Histogram and best fit", width='stretch'):
             
             st.session_state['show_plot'] = 'dist'
         
-        if st.sidebar.button("Plot QQ-Plot of best fit", use_container_width=True):
+        if st.sidebar.button("Plot QQ-Plot of best fit", width='stretch'):
             st.session_state['show_plot'] ='qq'
 
-        if st.sidebar.button("Plot QQ-Plot of Residuals", use_container_width=True):
+        if st.sidebar.button("Plot QQ-Plot of Residuals", width='stretch'):
             st.session_state['show_plot'] ='qqres'
 
-        if st.sidebar.button("Heatmap of correlation Matrix", use_container_width=True):
+        if st.sidebar.button("Heatmap of correlation Matrix", width='stretch'):
             st.session_state['show_plot'] ='heatmap'
     #--------------------Hist-Plot------------------------------------------------------
     if st.session_state.get('show_plot') == 'dist':
@@ -598,7 +598,7 @@ if uploaded_file is not None:
             options=available_features,
             default=available_features[:2] if len(available_features) > 1 else None
         )
-        if st.sidebar.button("Führe GLM aus", use_container_width=True):
+        if st.sidebar.button("Perform GLM", width='stretch'):
             if not feature_cols:
                 st.sidebar.error("Choose min. 1 feature!")
             else:
@@ -609,7 +609,7 @@ if uploaded_file is not None:
 
     if st.session_state.get('glm_trigger'):
 
-        with st.spinner("Berechne Modell..."):
+        with st.spinner("Calculate model..."):
         
             model_results = fit_glm(
                 df_for_glm, 
