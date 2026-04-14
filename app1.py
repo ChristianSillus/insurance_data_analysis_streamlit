@@ -160,7 +160,55 @@ def find_best_distribution1(data, candidate_distributions=None):
     results.sort(key=lambda x: x['aic'])
     return results[0]
 
-def plot_claim_distribution(ax, data, column, best_fit):
+def find_best_discrete_distribution(data):
+    # Speziell für Clm_Count (0, 1, 2...)
+    candidate_distributions = [
+        stats.poisson,
+        stats.nbinom,
+        stats.geom
+    ]
+    
+    results = []
+    # WICHTIG: Nullen NICHT löschen, nur NaNs entfernen
+    clean_data = data.dropna().values 
+
+    for dist in candidate_distributions:
+        try:
+            # Fit bei diskreten Verteilungen ist oft anders, 
+            # einfacher ist es hier oft über die Momente (Mittelwert/Varianz)
+            if dist.name == 'poisson':
+                mu = np.mean(clean_data)
+                params = (mu,)
+            elif dist.name == 'nbinom':
+                # Schätzung der Parameter n und p für NegBin
+                m = np.mean(clean_data)
+                v = np.var(clean_data)
+                if v > m:
+                    p = m / v
+                    n = m**2 / (v - m)
+                else:
+                    p = 0.99
+                    n = m * 100
+                params = (n, p)
+            
+            # Wahrscheinlichkeitsfunktion (PMF) statt Dichte (PDF)
+            logpmf_vals = dist.logpmf(clean_data, *params)
+            loglik = np.sum(logpmf_vals)
+            aic = 2*len(params) - 2*loglik
+
+            results.append({
+                'name': dist.name,
+                'dist': dist,
+                'aic': aic,
+                'params': params
+            })
+        except:
+            continue
+
+    results.sort(key=lambda x: x['aic'])
+    return results[0] if results else None
+
+def plot_claim_distribution1(ax, data, column, best_fit):
     #plots histogram of target variable and fit from find_best_distribution function
     # 1. Histogramm 
     sns.histplot(data=data, x=column, bins=100, kde=False, 
@@ -184,6 +232,48 @@ def plot_claim_distribution(ax, data, column, best_fit):
     
     return ax
 
+def plot_claim_distribution(ax, data, column, best_fit):
+    # Plots Histogramm der Zielvariable und den Fit der find_best_distribution Funktion
+    if best_fit is None:
+        return ax
+
+    # 1. Histogramm (stat="density" sorgt für Normierung auf 1)
+    sns.histplot(data=data, x=column, bins=50, kde=False, 
+                 stat="density", ax=ax, color='skyblue', alpha=0.6, label="Data")
+
+    # 2. Unterscheidung: Stetig (PDF) vs. Diskret (PMF)
+    # Prüfen, ob die Verteilung diskret ist (z.B. Poisson, nbinom)
+    is_discrete = hasattr(best_fit['dist'], 'pmf')
+
+    if is_discrete:
+        # X-Werte als ganze Zahlen (Integers) für diskrete Verteilungen
+        x_min, x_max = int(data[column].min()), int(data[column].max())
+        x_range = np.arange(x_min, x_max + 1)
+        
+        # Nutze PMF (Probability Mass Function)
+        y_fitted = best_fit['dist'].pmf(x_range, *best_fit['params'])
+        
+        # Diskret plotten wir besser mit Markern oder als Stufenplot
+        ax.plot(x_range, y_fitted, 'ro-', lw=2, markersize=5, 
+                label=f"Fit (PMF): {best_fit['name']}")
+    else:
+        # X-Werte als fließende Spanne für stetige Verteilungen (Geld)
+        x_min, x_max = data[column].min(), data[column].max()
+        x_range = np.linspace(x_min, x_max, 200)
+        
+        # Nutze PDF (Probability Density Function)
+        y_fitted = best_fit['dist'].pdf(x_range, *best_fit['params'])
+        
+        # Stetiger Linienplot
+        ax.plot(x_range, y_fitted, color='red', lw=2, 
+                label=f"Fit (PDF): {best_fit['name']}")
+
+    # Design
+    ax.set_title(f"Histogram with {best_fit['name']}-Fit")
+    ax.legend()
+    
+    return ax
+
 def plot_qq(ax, data, dist_obj, params, title_suffix=""):
     # Show QQ-Plot of best distribution
     # stats.probplot calculates quantiles
@@ -193,6 +283,32 @@ def plot_qq(ax, data, dist_obj, params, title_suffix=""):
     ax.set_title(f"Q-Q Plot: {dist_obj.name} {title_suffix}")
     ax.grid(True, linestyle='--', alpha=0.7)
     
+    return ax
+
+def plot_correlation_heatmap(ax, data, title="Correlation-Heatmap"):
+    """
+    Berechnet die Korrelation und plottet eine Heatmap.
+    """
+    # Korrelationsmatrix berechnen (standardmäßig Pearson)
+    corr = data.corr()
+
+    # Eine Maske erstellen, um die obere Hälfte zu verstecken (Tri-Map)
+    # Das macht die Heatmap deutlich übersichtlicher
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+
+    # Plotten
+    sns.heatmap(
+        corr, 
+        mask=mask, 
+        annot=True,           # Zeigt die Zahlen in den Kästchen
+        fmt=".2f",            # 2 Nachkommastellen
+        cmap='coolwarm',      # Blau (negativ) bis Rot (positiv)
+        center=0,             # Weißpunkt bei 0 Korrelation
+        ax=ax,
+        cbar_kws={"shrink": .8}
+    )
+
+    ax.set_title(title)
     return ax
 
 def plot_qq_residuals(ax, data, dist_obj, params, title_suffix=""):
@@ -393,13 +509,23 @@ if uploaded_file is not None:
                 st.session_state['last_analysis'] = best_fit
             else:
                 st.sidebar.error("No Distribution found")
+
+        if st.sidebar.button("Find the best discrete Fit", use_container_width=True):
+            data_to_fit = df_for_dist[target] 
+        
+            best_fit = find_best_discrete_distribution(data_to_fit)
+        
+            if best_fit:
+                st.session_state['last_analysis'] = best_fit
+            else:
+                st.sidebar.error("No Distribution found")
     if 'last_analysis' in st.session_state:
         st.divider()
         res = st.session_state['last_analysis']
         st.write(f"**Distribution:** {res['name']} | **AIC:** {res['aic']:.2f}")
         st.write("**Parameter:**", res['params'])
     #----------------------------------------------------------------------
-    #--------------Plot Histogram, QQ-Plot & QQ-Plot of residuals----------
+    #-----Plot Histogram, QQ-Plot, QQ-Plot of residuals & heatmap----------
     #----------------------------------------------------------------------
     if 'last_analysis' in st.session_state:
         st.sidebar.divider()
@@ -413,6 +539,9 @@ if uploaded_file is not None:
 
         if st.sidebar.button("Plot QQ-Plot of Residuals", use_container_width=True):
             st.session_state['show_plot'] ='qqres'
+
+        if st.sidebar.button("Heatmap of correlation Matrix", use_container_width=True):
+            st.session_state['show_plot'] ='heatmap'
     #--------------------Hist-Plot------------------------------------------------------
     if st.session_state.get('show_plot') == 'dist':
         fig, ax = plt.subplots()
@@ -443,6 +572,18 @@ if uploaded_file is not None:
     
     # Show in Streamlit
         st.pyplot(fig)
+    #------------------Heatmap Plot----------------------------------------
+    if st.session_state.get('show_plot') == 'heatmap':
+        
+        target = st.session_state['selected_target']
+        best_fit = st.session_state['last_analysis']
+        fig, ax = plt.subplots()
+    
+        plot_correlation_heatmap(ax,st.session_state['df_encoded'])
+    
+    # Show in Streamlit
+        st.pyplot(fig)
+
     #----------------------------------------------------------------------
     #--------------GLM of best fit-----------------------------------------
     #----------------------------------------------------------------------
