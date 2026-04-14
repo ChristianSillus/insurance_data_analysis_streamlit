@@ -286,24 +286,21 @@ def plot_qq(ax, data, dist_obj, params, title_suffix=""):
     return ax
 
 def plot_correlation_heatmap(ax, data, title="Correlation-Heatmap"):
-    """
-    Berechnet die Korrelation und plottet eine Heatmap.
-    """
-    # Korrelationsmatrix berechnen (standardmäßig Pearson)
+    #calculates correlation heatmap
+    
     corr = data.corr()
 
-    # Eine Maske erstellen, um die obere Hälfte zu verstecken (Tri-Map)
-    # Das macht die Heatmap deutlich übersichtlicher
+    
     mask = np.triu(np.ones_like(corr, dtype=bool))
 
-    # Plotten
+    # Plot
     sns.heatmap(
         corr, 
         mask=mask, 
-        annot=True,           # Zeigt die Zahlen in den Kästchen
-        fmt=".2f",            # 2 Nachkommastellen
-        cmap='coolwarm',      # Blau (negativ) bis Rot (positiv)
-        center=0,             # Weißpunkt bei 0 Korrelation
+        annot=True,           # shows number
+        fmt=".2f",           
+        cmap='coolwarm',      
+        center=0,             
         ax=ax,
         cbar_kws={"shrink": .8}
     )
