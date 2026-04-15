@@ -208,63 +208,39 @@ def find_best_discrete_distribution(data):
     results.sort(key=lambda x: x['aic'])
     return results[0] if results else None
 
-def plot_claim_distribution1(ax, data, column, best_fit):
-    #plots histogram of target variable and fit from find_best_distribution function
-    # 1. Histogramm 
-    sns.histplot(data=data, x=column, bins=100, kde=False, 
-                 stat="density", ax=ax, color='skyblue', alpha=0.6, label="Data")
-
-    # 2. Calculate X-Values for fit (Min to Max of Data)
-    x_min, x_max = data[column].min(), data[column].max()
-    x_range = np.linspace(x_min, x_max, 200)
-
-    # 3. PDF of best distribution 
-   
-    pdf_fitted = best_fit['dist'].pdf(x_range, *best_fit['params'])
-
-    # 4. Plot fit
-    ax.plot(x_range, pdf_fitted, color='red', lw=2, 
-            label=f"Fit: {best_fit['name']}")
-
-    # Design
-    ax.set_title(f"Histogramm with {best_fit['name']}-Fit")
-    ax.legend()
-    
-    return ax
-
 def plot_claim_distribution(ax, data, column, best_fit):
-    # Plots Histogramm der Zielvariable und den Fit der find_best_distribution Funktion
+    # Plots Histogramm of target varible and fit of find_best_distribution function
     if best_fit is None:
         return ax
 
-    # 1. Histogramm (stat="density" sorgt für Normierung auf 1)
+    # 1. Histogramm (stat="density" normalizes to 1)
     sns.histplot(data=data, x=column, bins=50, kde=False, 
                  stat="density", ax=ax, color='skyblue', alpha=0.6, label="Data")
 
-    # 2. Unterscheidung: Stetig (PDF) vs. Diskret (PMF)
-    # Prüfen, ob die Verteilung diskret ist (z.B. Poisson, nbinom)
+    # 2.  steadily (PDF) vs. discrete (PMF)
+    # Check whether distritbution is discrete (z.B. Poisson, nbinom)
     is_discrete = hasattr(best_fit['dist'], 'pmf')
 
     if is_discrete:
-        # X-Werte als ganze Zahlen (Integers) für diskrete Verteilungen
+        # X-Values as Integers for discrete distribution
         x_min, x_max = int(data[column].min()), int(data[column].max())
         x_range = np.arange(x_min, x_max + 1)
         
-        # Nutze PMF (Probability Mass Function)
+        # Use PMF (Probability Mass Function)
         y_fitted = best_fit['dist'].pmf(x_range, *best_fit['params'])
         
-        # Diskret plotten wir besser mit Markern oder als Stufenplot
+        # Discrete plot with  markers or stepplot
         ax.plot(x_range, y_fitted, 'ro-', lw=2, markersize=5, 
                 label=f"Fit (PMF): {best_fit['name']}")
     else:
-        # X-Werte als fließende Spanne für stetige Verteilungen (Geld)
+        #
         x_min, x_max = data[column].min(), data[column].max()
         x_range = np.linspace(x_min, x_max, 200)
         
-        # Nutze PDF (Probability Density Function)
+        # Use PDF (Probability Density Function)
         y_fitted = best_fit['dist'].pdf(x_range, *best_fit['params'])
         
-        # Stetiger Linienplot
+        # Steady plot
         ax.plot(x_range, y_fitted, color='red', lw=2, 
                 label=f"Fit (PDF): {best_fit['name']}")
 
@@ -329,7 +305,7 @@ def plot_qq_residuals(ax, data, dist_obj, params, title_suffix=""):
 
     return ax
 
-def fit_glm(df, target_col, feature_cols, best_fit):
+def fit_glm1(df, target_col, feature_cols, best_fit):
     #fits GLM model with best distribution
 
     X = df[feature_cols].copy()
@@ -341,25 +317,25 @@ def fit_glm(df, target_col, feature_cols, best_fit):
     try:
         # 1. LOG-NORM
         if dist_name == 'lognorm':
-            st.info("🔄 Fitte log-lineares Modell (Log-Normal)...")
+            st.info("Fitting log-linear model (Log-Normal)...")
             y_log = np.log1p(y)
             model = sm.OLS(y_log, X)
             results = model.fit()
         # 2. GAMMA
         elif dist_name == 'gamma':
-            st.info("🔄 Fitte Gamma GLM mit Log-Link...")
+            st.info("Fitting Gamma GLM with Log-Link...")
             family = sm.families.Gamma(link=sm.families.links.Log())
             model = sm.GLM(y, X, family=family)
             results = model.fit()
         # 3. INVERSE GAUSSIAN
         elif dist_name == 'invgauss':
-            st.info("🔄 Fitte Inverse Gaussian GLM mit Log-Link...")
+            st.info("Fitting Inverse Gaussian GLM with Log-Link...")
             family = sm.families.InverseGaussian(link=sm.families.links.Log())
             model = sm.GLM(y, X, family=family)
             results = model.fit()
         # 4. HEAVY TAILS (Proxy via InvGauss)
         elif dist_name in ['pareto', 'burr', 'fisk', 'weibull_min']:
-            st.info(f"🔄 Fitte Inverse Gaussian GLM als Proxy für {dist_name}...")
+            st.info(f"Fitting Inverse Gaussian GLM als Proxy für {dist_name}...")
             family = sm.families.InverseGaussian(link=sm.families.links.Log())
             model = sm.GLM(y, X, family=family)
             results = model.fit()
@@ -375,6 +351,92 @@ def fit_glm(df, target_col, feature_cols, best_fit):
         st.error(f"GLM-Error at {dist_name}: {e}")
         st.warning("Fallback easier OLS is done.")
         return sm.OLS(y, X).fit()
+
+def fit_glm(df, target_col, feature_cols, best_fit, exposure_col=None):
+    # Daten vorbereiten
+    X = df[feature_cols].copy()
+    X = sm.add_constant(X)
+    y = df[target_col].copy()
+    
+    # Offset berechnen: In GLMs mit Log-Link nutzt man log(Exposure)
+    offset = None
+    if exposure_col and exposure_col in df.columns:
+        # Sicherstellen, dass keine 0 enthalten ist (log(0) ist nicht definiert)
+        offset = np.log(df[exposure_col].clip(lower=1e-6))
+    
+    dist_name = best_fit.get('name', 'default')
+
+    try:
+        # 1. LOG-NORM (Spezialfall via OLS)
+        if dist_name == 'lognorm':
+            st.info("🔄 Fitting log-linear model (Log-Normal)...")
+            y_log = np.log1p(y)
+            # Mathematisch: log(y) - log(E) = X*beta
+            if offset is not None:
+                y_log = y_log - offset
+            model = sm.OLS(y_log, X)
+            results = model.fit()
+
+        # 2. GAMMA
+        elif dist_name == 'gamma':
+            st.info("🔄 Fitting Gamma GLM with Log-Link...")
+            family = sm.families.Gamma(link=sm.families.links.Log())
+            model = sm.GLM(y, X, family=family, offset=offset)
+            results = model.fit()
+
+        # 3. INVERSE GAUSSIAN
+        elif dist_name == 'invgauss':
+            st.info("🔄 Fitting Inverse Gaussian GLM with Log-Link...")
+            family = sm.families.InverseGaussian(link=sm.families.links.Log())
+            model = sm.GLM(y, X, family=family, offset=offset)
+            results = model.fit()
+
+        # 4. HEAVY TAILS (Proxy via InvGauss)
+        elif dist_name in ['pareto', 'burr', 'fisk', 'weibull_min']:
+            st.info(f"🔄 Fitting Inverse Gaussian GLM as Proxy for {dist_name}...")
+            family = sm.families.InverseGaussian(link=sm.families.links.Log())
+            model = sm.GLM(y, X, family=family, offset=offset)
+            results = model.fit()
+
+        # 5. NORMAL DISTRIBUTION
+        else:
+            st.info(f"🔄 Fitting Gauß-Model (normal distribution) for: {dist_name}...")
+            # Achtung: Gaussian nutzt Standard-Identity-Link. 
+            # Wenn Offset gewünscht, sollte man auch hier über link=Log() nachdenken.
+            model = sm.GLM(y, X, family=sm.families.Gaussian(), offset=offset)
+            results = model.fit()
+
+        return results
+
+    except Exception as e:
+        st.error(f"GLM-Error at {dist_name}: {e}")
+        st.warning("Fallback easier OLS is done.")
+        return sm.OLS(y, X).fit()
+
+def plot_log_histogram(ax, data, column):
+
+    # 1. transform Data to log (log(x + 1))
+    log_data = np.log1p(data[column])
+    
+    # 2. Histogramm plot
+    sns.histplot(
+        log_data, 
+        ax=ax, 
+        stat="density", 
+        bins=50, 
+        color="skyblue", 
+        edgecolor="white",
+        kde=True 
+    )
+    
+    # 3. axes
+    ax.set_title(f"Distribution of log({column} + 1)")
+    ax.set_xlabel(f"log({column} + 1)")
+    ax.set_ylabel("Density")
+    
+    return ax
+
+
 
 #-------------------------------------------------------------------
 #-------------------Streamlit UserInterface-------------------------
@@ -542,6 +604,9 @@ if uploaded_file is not None:
 
         if st.sidebar.button("Heatmap of correlation Matrix", width='stretch'):
             st.session_state['show_plot'] ='heatmap'
+        
+        if st.sidebar.button("Log-Distribution",width='stretch'):
+            st.session_state['show_plot'] = "logdist"
     #--------------------Hist-Plot------------------------------------------------------
     if st.session_state.get('show_plot') == 'dist':
         fig, ax = plt.subplots()
@@ -583,6 +648,14 @@ if uploaded_file is not None:
     
     # Show in Streamlit
         st.pyplot(fig)
+    #--------------------------Log-Dist Plot-------------------------------
+    if st.session_state.get('show_plot') == 'logdist':
+
+        fig,ax =plt.subplots()
+
+        plot_log_histogram(ax,st.session_state['df_encoded'],target)
+
+        st.pyplot(fig)
 
     #----------------------------------------------------------------------
     #--------------GLM of best fit-----------------------------------------
@@ -621,5 +694,6 @@ if uploaded_file is not None:
         # Anzeige der Ergebnisse
             st.success("GLM successfully calculated!")
             st.write(model_results.summary())
+    
 else:
     st.info("Please upload file.")
