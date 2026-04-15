@@ -68,8 +68,23 @@ def clean_and_convert(df, cols_to_numeric=None):
 def encode_categorical_data(df, columns_to_encode):
     # input: DataFrame and categorical columns
     # returns DataFrame with One-Hot encoded categorical columns
-    if not columns_to_encode: return df
-    return pd.get_dummies(df, columns=columns_to_encode, drop_first=True, dtype=int)
+    # and info about dropped columns as reference for GLM
+    if not columns_to_encode: 
+        return df, {}
+    
+    df_processed = df.copy()
+    dropped_info = {}
+
+    for col in columns_to_encode:
+        original_categories = set(df_processed[col].unique().astype(str))
+        df_processed = pd.get_dummies(df_processed, columns=[col], drop_first=True, dtype=int)
+        
+        current_cols = {c.replace(f"{col}_", "") for c in df_processed.columns if c.startswith(f"{col}_")}
+        dropped = list(original_categories - current_cols)
+        if dropped:
+            dropped_info[col] = dropped[0]
+
+    return df_processed, dropped_info
 
 def get_target_stats(df, target_col):
     # input DataFrame & target column
@@ -541,17 +556,35 @@ if uploaded_file is not None:
     #----------------------------------------------------------------------
     #--------------One-Hot Encoding of categorical columns-----------------
     #----------------------------------------------------------------------
+    
     if 'df_final' in st.session_state:
         st.sidebar.divider()
         st.sidebar.subheader("Encoding")
         df_for_ohe = st.session_state['df_final']
         cat_cols = df_for_ohe.select_dtypes(exclude=['number']).columns.tolist()
+    
         if cat_cols:
             to_encode = st.sidebar.multiselect("Categorical Columns:", options=cat_cols, default=cat_cols)
+        
             if st.sidebar.button("Encoding"):
-                st.session_state['df_encoded'] = encode_categorical_data(df_for_ohe, to_encode)
+                # return encoded df and info about dropped column
+                df_enc, info = encode_categorical_data(df_for_ohe, to_encode)
+            
+                st.session_state['df_encoded'] = df_enc
+                st.session_state['encoding_info'] = info  
+            
                 st.sidebar.success("Encoded!")
                 st.rerun()
+    #-------------------show which variable are dropped and are now reference for GLM-----------------
+    if 'encoding_info' in st.session_state:
+        st.info("### Analysis of reference variable (Baseline)")
+        cols = st.columns(len(st.session_state['encoding_info']))
+    
+        for idx, (col_name, ref_val) in enumerate(st.session_state['encoding_info'].items()):
+            with cols[idx]:
+                st.metric(label=f"Reference for {col_name}", value=ref_val)
+                st.caption(f"All Coefficients for {col_name} are relative to **{ref_val}**.")
+
     #----------------------------------------------------------------------
     #--------------Find best distribution----------------------------------
     #----------------------------------------------------------------------
@@ -593,9 +626,11 @@ if uploaded_file is not None:
         st.sidebar.divider()
         st.sidebar.subheader("Plots")
         if st.sidebar.button("Plot Histogram and best fit", width='stretch'):
-            
             st.session_state['show_plot'] = 'dist'
         
+        if st.sidebar.button("Log-Distribution",width='stretch'):
+            st.session_state['show_plot'] = "logdist"
+
         if st.sidebar.button("Plot QQ-Plot of best fit", width='stretch'):
             st.session_state['show_plot'] ='qq'
 
@@ -605,8 +640,6 @@ if uploaded_file is not None:
         if st.sidebar.button("Heatmap of correlation Matrix", width='stretch'):
             st.session_state['show_plot'] ='heatmap'
         
-        if st.sidebar.button("Log-Distribution",width='stretch'):
-            st.session_state['show_plot'] = "logdist"
     #--------------------Hist-Plot------------------------------------------------------
     if st.session_state.get('show_plot') == 'dist':
         fig, ax = plt.subplots()
@@ -675,7 +708,7 @@ if uploaded_file is not None:
             if not feature_cols:
                 st.sidebar.error("Choose min. 1 feature!")
             else:
-                # Wir speichern alles Nötige in den session_state
+                # safe in session_state
                 st.session_state['glm_trigger'] = True
                 st.session_state['glm_target'] = target
                 st.session_state['glm_features'] = feature_cols
