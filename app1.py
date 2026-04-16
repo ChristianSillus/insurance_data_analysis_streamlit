@@ -90,15 +90,17 @@ def get_target_stats(df, target_col):
     # returns first statistical values of target 
     vals = df[target_col]
     pos_vals = vals[vals > 0]
-    metrics = ["Count", "Mean", "Median", "Std. Deviation", "Min", "Max"]
+    metrics = ["Count", "Mean", "Median", "Std. Deviation", "Min", "Max", "95% Percentile", "99% Percentile"]
     
     stats_data = {
         "Metric": metrics,
         "Total (incl. 0)": [
-            len(vals), vals.mean(), vals.median(), vals.std(), vals.min(), vals.max()
+            len(vals), vals.mean(), vals.median(), vals.std(), vals.min(), vals.max(),
+            vals.quantile(0.95), vals.quantile(0.99)  
         ],
         "Values > 0": [
-            len(pos_vals), pos_vals.mean(), pos_vals.median(), pos_vals.std(), pos_vals.min(), pos_vals.max()
+            len(pos_vals), pos_vals.mean(), pos_vals.median(), pos_vals.std(), pos_vals.min(), pos_vals.max(),
+            pos_vals.quantile(0.95), pos_vals.quantile(0.99)  
         ]
     }
     return pd.DataFrame(stats_data)
@@ -474,6 +476,21 @@ def plot_log_histogram(ax, data, column, best_fit=None):
     
     return ax
 
+def scale_columns(df, columns, divisor):
+    # scales columns by dividing by divisor
+    if not columns:
+        return df
+    df_new = df.copy()
+    
+    for col in columns:
+        if col in df_new.columns:
+            # check if numeric
+            if pd.api.types.is_numeric_dtype(df_new[col]):
+                df_new[col] = df_new[col] / divisor
+            else:
+                st.warning(f"Column '{col}' is not numeric.")     
+    return df_new
+
 #-------------------------------------------------------------------
 #-------------------Streamlit UserInterface-------------------------
 #-------------------------------------------------------------------
@@ -492,6 +509,9 @@ if uploaded_file is not None:
     if 'df_encoded' in st.session_state:
         st.subheader("Final Dataset (Encoded)")
         disp = st.session_state['df_encoded']
+    elif 'df_scaled' in st.session_state:
+        st.subheader("scaled Datenset")
+        disp = st.session_state['df_scaled']
     elif 'df_final' in st.session_state:
         st.subheader("Cleaned Datenset")
         disp = st.session_state['df_final']
@@ -529,36 +549,80 @@ if uploaded_file is not None:
             if 'df_encoded' in st.session_state: del st.session_state['df_encoded']
             st.sidebar.success("Finshed Cleaning")
             st.rerun()
+    #----------------------------------------------------------------------
+    #--------------eventually divide column by x---------------------------
+    #----------------------------------------------------------------------
+    if 'df_final' in st.session_state:
+        if 'df_scaled' not in st.session_state:
+            st.session_state['df_scaled'] = st.session_state['df_final'].copy()
         
+        st.sidebar.divider()
+        st.sidebar.subheader("Divide Columns by")
+        div_cols = st.session_state['df_final'].columns.tolist()
+    
+        if div_cols:
+            selected_div_cols = st.sidebar.multiselect("Select columns to scale", 
+                options=div_cols)
+
+            divisor = st.sidebar.number_input(
+                "Enter Divisor", 
+                min_value=1.0, 
+                value=1000.0, 
+                step=10.0,
+                format="%.1f"
+            )
+            btn_col1, btn_col2 = st.sidebar.columns(2)
+            if btn_col1.button("Apply Scale"):
+                if selected_div_cols:
+                    # scale from actual df_scaled
+                    st.session_state['df_scaled'] = scale_columns(
+                        st.session_state['df_scaled'], 
+                        selected_div_cols, 
+                        divisor
+                    )
+
+                    if 'df_encoded' in st.session_state:
+                        del st.session_state['df_encoded']
+                    
+                    st.sidebar.success(f"Divided by {divisor}")
+                    st.rerun()
+                else:
+                    st.sidebar.error("Please select columns!")
+        
+            if btn_col2.button("Reset Scaling"):
+                st.session_state['df_scaled'] = st.session_state['df_final'].copy()
+                if 'df_encoded' in st.session_state:
+                    del st.session_state['df_encoded']
+                st.rerun()
     #----------------------------------------------------------------------
     #--------------Select Target-Variable & gets first stats---------------
     #----------------------------------------------------------------------
-    if 'df_final' in st.session_state:
+    if 'df_scaled' in st.session_state:
         if 'df_encoded' not in st.session_state:
-            st.session_state['df_encoded'] = st.session_state['df_final']
+            st.session_state['df_encoded'] = st.session_state['df_scaled']
         st.sidebar.divider()
         st.sidebar.subheader("Target Variable")
-        num_cols = st.session_state['df_final'].select_dtypes(include=['number']).columns.tolist()
+        num_cols = st.session_state['df_scaled'].select_dtypes(include=['number']).columns.tolist()
         if num_cols:
             target_var = st.sidebar.selectbox("Target Variable:", options=num_cols)
             if st.sidebar.button("Chose Target Variable"):
                 st.session_state['show_stats'] = True
                 st.session_state['selected_target'] = target_var
                 st.rerun()
-    if st.session_state.get('show_stats') and 'df_final' in st.session_state:
+    if st.session_state.get('show_stats') and 'df_scaled' in st.session_state:
         st.divider()
         t_col = st.session_state['selected_target']
         st.header(f"Stats for: {t_col}")
-        stats_df = get_target_stats(st.session_state['df_final'], t_col)
+        stats_df = get_target_stats(st.session_state['df_scaled'], t_col)
         st.table(stats_df.style.format(precision=2))
         
-        val_col = pd.to_numeric(st.session_state['df_final'][t_col], errors='coerce')
+        val_col = pd.to_numeric(st.session_state['df_scaled'][t_col], errors='coerce')
         zeros = (val_col == 0).sum()
         st.metric("Percents of Zero Values", f"{(zeros/len(val_col)*100):.2f} %", f"{zeros} of {len(val_col)} Rows")
     #----------------------------------------------------------------------
     #--------------Filter Target Variable----------------------------------
     #----------------------------------------------------------------------
-    if 'selected_target' in st.session_state and 'df_final' in st.session_state:
+    if 'selected_target' in st.session_state and 'df_scaled' in st.session_state:
         st.sidebar.divider()
         st.sidebar.subheader("Target-Filter & Outlier")
         target = st.session_state['selected_target']
@@ -569,8 +633,8 @@ if uploaded_file is not None:
             help="Cuts values greater than percentil."
         )
         if st.sidebar.button(f"Filter on {target}"):
-            df_clean, limit = filter_target_range(st.session_state['df_final'], target, percentile=p_slider)
-            st.session_state['df_final'] = df_clean
+            df_clean, limit = filter_target_range(st.session_state['df_scaled'], target, percentile=p_slider)
+            st.session_state['df_scaled'] = df_clean
             if 'df_encoded' in st.session_state: del st.session_state['df_encoded']
             st.sidebar.success(f"Filtered! Limit: {limit:,.2f}")
             st.rerun()
@@ -578,10 +642,10 @@ if uploaded_file is not None:
     #--------------One-Hot Encoding of categorical columns-----------------
     #----------------------------------------------------------------------
     
-    if 'df_final' in st.session_state:
+    if 'df_scaled' in st.session_state:
         st.sidebar.divider()
         st.sidebar.subheader("Encoding")
-        df_for_ohe = st.session_state['df_final']
+        df_for_ohe = st.session_state['df_scaled']
         cat_cols = df_for_ohe.select_dtypes(exclude=['number']).columns.tolist()
     
         if cat_cols:
