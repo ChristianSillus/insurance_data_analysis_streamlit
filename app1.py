@@ -16,7 +16,6 @@ import seaborn as sns
 
 #-----------------Functions-----------------------
 
-
 def load_data(uploaded_file):
     if uploaded_file is None:
         return None
@@ -34,7 +33,7 @@ def load_data(uploaded_file):
         elif extension in ['.rds', '.rda', '.rdata']:
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp_file:
-                tmp_file.write(uploaded_file.getbuffer()) # getbuffer() ist performanter als getvalue()
+                tmp_file.write(uploaded_file.getbuffer()) 
                 tmp_path = tmp_file.name
             
             try:
@@ -44,7 +43,7 @@ def load_data(uploaded_file):
                     obj_name = list(result.keys())[0]
                     return result[obj_name]
                 else:
-                    st.error("Die R-Datei scheint leer zu sein.")
+                    st.error("R-Data is empty.")
                     return None
             finally:
                 
@@ -52,7 +51,7 @@ def load_data(uploaded_file):
                     os.remove(tmp_path)
                     
     except Exception as e:
-        st.error(f"Fehler beim Laden der Daten ({extension}): {e}")
+        st.error(f"Error while loading data ({extension}): {e}")
         return None
 
 def clean_and_convert(df, cols_to_numeric=None):
@@ -123,7 +122,7 @@ def filter_target_range(df, target_col, percentile=1.0):
         
     return df_filtered.reset_index(drop=True), threshold
 
-def find_best_distribution1(data, candidate_distributions=None):
+def find_best_distribution(data, candidate_distributions=None):
     # finds best distribution with aic comparison 
     # returns result of distribution fit
     if candidate_distributions is None:
@@ -230,7 +229,7 @@ def plot_claim_distribution(ax, data, column, best_fit):
 
     # 1. Histogramm (stat="density" normalizes to 1)
     sns.histplot(data=data, x=column, bins=50, kde=False, 
-                 stat="density", ax=ax, color='skyblue', alpha=0.6, label="Data")
+                 stat="density", ax=ax, color='skyblue',edgecolor ='white', alpha=0.6, label="Data")
 
     # 2.  steadily (PDF) vs. discrete (PMF)
     # Check whether distritbution is discrete (z.B. Poisson, nbinom)
@@ -428,12 +427,13 @@ def fit_glm(df, target_col, feature_cols, best_fit, exposure_col=None):
         st.warning("Fallback easier OLS is done.")
         return sm.OLS(y, X).fit()
 
-def plot_log_histogram(ax, data, column):
-
-    # 1. transform Data to log (log(x + 1))
-    log_data = np.log1p(data[column])
+def plot_log_histogram(ax, data, column, best_fit=None):
+    # 1. transform data log(x + 1)
+    # only use positve values (as in find_best_distribution)
+    clean_data = data[column][data[column] > 0].dropna()
+    log_data = np.log1p(clean_data)
     
-    # 2. Histogramm plot
+    # 2. plot histogram
     sns.histplot(
         log_data, 
         ax=ax, 
@@ -441,17 +441,38 @@ def plot_log_histogram(ax, data, column):
         bins=50, 
         color="skyblue", 
         edgecolor="white",
-        kde=True 
+        kde=False  # we plot best_fit instead
     )
     
-    # 3. axes
+    # 3. show fit if available 
+    if best_fit:
+        dist = best_fit['dist']
+        params = best_fit['params']
+        
+        # x-axis
+        x_min, x_max = ax.get_xlim()
+        y_range = np.linspace(x_min, x_max, 200)
+        
+        # back transformation to original scale: x = exp(y) - 1
+        x_original = np.expm1(y_range)
+        
+        # PDF calculation on original scale
+        pdf_original = dist.pdf(x_original, *params)
+        
+        # Transformation of PDF in Log-space:
+        # pdf_log(y) = pdf_orig(exp(y)-1) * exp(y)
+        pdf_log_transformed = pdf_original * np.exp(y_range)
+        
+        ax.plot(y_range, pdf_log_transformed, 'r-', lw=2, 
+                label=f"Fit: {best_fit['name']}")
+        ax.legend()
+    
+    # 4. Axis labeling 
     ax.set_title(f"Distribution of log({column} + 1)")
     ax.set_xlabel(f"log({column} + 1)")
     ax.set_ylabel("Density")
     
     return ax
-
-
 
 #-------------------------------------------------------------------
 #-------------------Streamlit UserInterface-------------------------
@@ -533,7 +554,7 @@ if uploaded_file is not None:
         
         val_col = pd.to_numeric(st.session_state['df_final'][t_col], errors='coerce')
         zeros = (val_col == 0).sum()
-        st.metric("Percents of Zero Values", f"{(zeros/len(val_col)*100):.2f} %", f"{zeros} von {len(val_col)} Zeilen")
+        st.metric("Percents of Zero Values", f"{(zeros/len(val_col)*100):.2f} %", f"{zeros} of {len(val_col)} Rows")
     #----------------------------------------------------------------------
     #--------------Filter Target Variable----------------------------------
     #----------------------------------------------------------------------
@@ -575,16 +596,7 @@ if uploaded_file is not None:
             
                 st.sidebar.success("Encoded!")
                 st.rerun()
-    #-------------------show which variable are dropped and are now reference for GLM-----------------
-    if 'encoding_info' in st.session_state:
-        st.info("### Analysis of reference variable (Baseline)")
-        cols = st.columns(len(st.session_state['encoding_info']))
     
-        for idx, (col_name, ref_val) in enumerate(st.session_state['encoding_info'].items()):
-            with cols[idx]:
-                st.metric(label=f"Reference for {col_name}", value=ref_val)
-                st.caption(f"All Coefficients for {col_name} are relative to **{ref_val}**.")
-
     #----------------------------------------------------------------------
     #--------------Find best distribution----------------------------------
     #----------------------------------------------------------------------
@@ -598,7 +610,7 @@ if uploaded_file is not None:
         if st.sidebar.button("Find the best Fit", width='stretch'):
             data_to_fit = df_for_dist[target] 
         
-            best_fit = find_best_distribution1(data_to_fit)
+            best_fit = find_best_distribution(data_to_fit)
         
             if best_fit:
                 st.session_state['last_analysis'] = best_fit
@@ -620,7 +632,7 @@ if uploaded_file is not None:
         st.write(f"**Distribution:** {res['name']} | **AIC:** {res['aic']:.2f}")
         st.write("**Parameter:**", res['params'])
     #----------------------------------------------------------------------
-    #-----Plot Histogram, QQ-Plot, QQ-Plot of residuals & heatmap----------
+    #-Plot Histogram, QQ-Plot, QQ-Plot of residuals, heatmap, log-hist-----
     #----------------------------------------------------------------------
     if 'last_analysis' in st.session_state:
         st.sidebar.divider()
@@ -686,9 +698,19 @@ if uploaded_file is not None:
 
         fig,ax =plt.subplots()
 
-        plot_log_histogram(ax,st.session_state['df_encoded'],target)
+        plot_log_histogram(ax,st.session_state['df_encoded'],target,st.session_state['last_analysis'])
 
         st.pyplot(fig)
+
+    #-------------------show which variable are dropped and are now reference for GLM-----------------
+    if 'encoding_info' in st.session_state:
+        st.info("### Analysis of reference variable (Baseline)")
+        cols = st.columns(len(st.session_state['encoding_info']))
+    
+        for idx, (col_name, ref_val) in enumerate(st.session_state['encoding_info'].items()):
+            with cols[idx]:
+                st.metric(label=f"Reference for {col_name}", value=ref_val)
+                st.caption(f"All Coefficients for {col_name} are relative to **{ref_val}**.")
 
     #----------------------------------------------------------------------
     #--------------GLM of best fit-----------------------------------------
@@ -708,7 +730,7 @@ if uploaded_file is not None:
             if not feature_cols:
                 st.sidebar.error("Choose min. 1 feature!")
             else:
-                # safe in session_state
+                # store in session_state
                 st.session_state['glm_trigger'] = True
                 st.session_state['glm_target'] = target
                 st.session_state['glm_features'] = feature_cols
@@ -724,7 +746,7 @@ if uploaded_file is not None:
                 st.session_state['last_analysis']
             )
         
-        # Anzeige der Ergebnisse
+        # show results of GLM
             st.success("GLM successfully calculated!")
             st.write(model_results.summary())
     
