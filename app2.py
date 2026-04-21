@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import scipy.stats as stats
 import numpy as np
 import seaborn as sns
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 #------------------------------------------------------------
 # Functions
 #------------------------------------------------------------
@@ -364,6 +366,59 @@ def fit_glm(df, target_col, feature_cols, best_fit, exposure_col=None):
         st.warning("Fallback easier OLS is done.")
         return sm.OLS(y, X).fit()
 
+def fit_machine_learning(df, target_col, feature_cols):
+    """
+    Trainiert einen Random Forest als nicht-linearen Vergleich zum GLM.
+    """
+    X = df[feature_cols].copy()
+    y = df[target_col].copy()
+    
+    # Random Forest benötigt keine Konstante (sm.add_constant), 
+    # da er nicht-linear ist.
+    
+    rf_model = RandomForestRegressor(
+        n_estimators=100, 
+        max_depth=10,      # Begrenzt, um Overfitting zu vermeiden
+        random_state=42,
+        n_jobs=-1          # Nutzt alle CPU-Kerne
+    )
+    
+    with st.spinner("Training Random Forest..."):
+        rf_model.fit(X, y)
+    
+    return rf_model
+
+def get_model_comparison(glm_results, rf_model, df, target_col, feature_cols, dist_name):
+    X_glm = sm.add_constant(df[feature_cols])
+    y_true = df[target_col]
+    
+    # 1. GLM Vorhersage holen
+    y_pred_glm = glm_results.predict(X_glm)
+    
+    # --- RÜCKTRANSFORMATION NUR BEI LOGNORM ---
+    if dist_name == 'lognorm':
+        # Da im Fit np.log1p genutzt wurde, hier np.expm1 nutzen
+        y_pred_glm = np.expm1(y_pred_glm)
+    # ------------------------------------------
+    
+    # 2. Random Forest Vorhersage (lernt meist direkt auf Originalskala)
+    y_pred_rf = rf_model.predict(df[feature_cols])
+    
+    metrics = {
+        "Metric": ["MAE", "RMSE", "R2 Score"],
+        "GLM": [
+            mean_absolute_error(y_true, y_pred_glm),
+            np.sqrt(mean_squared_error(y_true, y_pred_glm)),
+            r2_score(y_true, y_pred_glm)
+        ],
+        "Random Forest": [
+            mean_absolute_error(y_true, y_pred_rf),
+            np.sqrt(mean_squared_error(y_true, y_pred_rf)),
+            r2_score(y_true, y_pred_rf)
+        ]
+    }
+    return pd.DataFrame(metrics)
+
 def get_target_stats(df, target_col):
     """
     Berechnet statistische Kennzahlen für eine Spalte im übergebenen DataFrame.
@@ -401,6 +456,7 @@ default_config = {
                 'selected_cols': [],
                 'cols_to_fix': [],
                 'scaling_cols': [],
+                #'feature_cols':[],
                 'divisor': 1000.0,
                 'target': None,
                 'p_range': (0.0, 1.0),
@@ -428,7 +484,7 @@ with st.sidebar:
             # 2. reset complete config if new data file is uploaded
             st.session_state.config = default_config
             # 3. also all analysis session_states
-            keys_to_clear = ['last_fit', 'last_analysis', 'glm_trigger']
+            keys_to_clear = ['last_fit', 'last_analysis', 'glm_trigger','glm_results','rf_results','feature_cols']
             for key in keys_to_clear:
                 if key in st.session_state:
                     del st.session_state[key]
@@ -448,10 +504,11 @@ with st.sidebar:
             # now session_state is set up 
             st.session_state.config['selected_cols'] = temp_selection
         
+            # clean cols_to_fix DF when releavant column is later deleted 
+            st.session_state.config['cols_to_fix'] = [c for c in st.session_state.config['cols_to_fix'] if c in temp_selection]
             # reset later settings if depending column was deleted 
             if st.session_state.config['target'] not in temp_selection:
                 st.session_state.config['target'] = None
-            
             st.success("Auswahl übernommen!")
             st.rerun() 
 
@@ -604,7 +661,7 @@ if 'df_raw' in st.session_state:
         with col1:
             st.subheader("Distribution Fit")
             # if st.button("Find best fit", width='stretch'):
-            #     with st.spinner("Berechne..."):
+            #     with st.spinner("Calculate..."):
             #         res = find_best_distribution(df_final[st.session_state.config['target']])
             #         st.session_state['last_fit'] = res
             
@@ -639,14 +696,65 @@ if 'df_raw' in st.session_state:
                 st.pyplot(fig)
 
     #-------------------------------------------------------------------
+    # Random Forest SECTION
+    #-------------------------------------------------------------------
+    # use ML-Random Forest for feature selection 
+    if st.session_state.config['target']:
+        st.divider()
+        st.header("Random Forest Analysis")
+        temp_features = st.multiselect("Features for analysis:", [c for c in df_final.columns if c != st.session_state.config['target']])
+    
+        if st.button("Perform Random Forest Analysis"):
+            features = temp_features
+            st.session_state['feature_cols'] = features
+            rf_results = fit_machine_learning(df_final, t_col, features)
+            st.session_state['rf_results'] = rf_results
+
+        if 'rf_results' in st.session_state and 'feature_cols' in st.session_state:
+            features = st.session_state['feature_cols']
+            rf_results = st.session_state['rf_results']
+                
+            col1, col2 = st.columns([2, 1]) # 2/3 for plot, 1/3 for stats
+
+            with col1:
+                st.write("**Feature Importance**")
+                importances = pd.Series(rf_results.feature_importances_, index=features).sort_values(ascending=True)
+                st.bar_chart(importances)
+
+            with col2:
+                st.write("**Model Insights**")
+                    
+                # 1. Performance metrics
+                y_true = df_final[st.session_state.config['target']]
+                y_pred = rf_results.predict(df_final[features])
+                r2 = r2_score(y_true, y_pred)
+                    
+                st.metric("R² Score", f"{r2:.3f}")
+                    
+                # 2. Structure-Information of forest
+                
+                depths = [estimator.get_depth() for estimator in rf_results.estimators_]
+                avg_depth = sum(depths) / len(depths)
+                    
+                st.write("---")
+                st.write("**Forest Structure:**")
+                st.caption(f"Number of trees: {len(rf_results.estimators_)}")
+                st.caption(f"Avg. tree depth: {avg_depth:.1f} levels")
+                    
+                # 3. Top feature as text
+                top_feat = importances.index[-1]
+                st.success(f"Key Driver: **{top_feat}**")
+
+    #-------------------------------------------------------------------
     # GLM SECTION
     #-------------------------------------------------------------------
-    st.divider()
     
-    st.header("GLM Modelling ")
+    if st.session_state.config['target'] and 'last_fit' in st.session_state and 'feature_cols' in st.session_state:
+        st.divider()
     
-    if st.session_state.config['target'] and 'last_fit' in st.session_state:
-        features = st.multiselect("Features für GLM:", [c for c in df_final.columns if c != st.session_state.config['target']])
+        st.header("GLM Modelling ")
+        #features = st.multiselect("Features for GLM:", [c for c in df_final.columns if c != st.session_state.config['target']])
+        features = st.session_state['feature_cols']
         if 'last_encoding_info' in st.session_state and st.session_state['last_encoding_info']:
             st.subheader("Encoding Info")
             #  Dictionarys to DataFrame for Visualization
@@ -656,14 +764,67 @@ if 'df_raw' in st.session_state:
                 )
             st.dataframe(enc_df, hide_index=True, width='stretch')     
         if st.button("Calculate GLM") and features:
-            model_results = model_results = fit_glm(
+            model_results = fit_glm(
                 df_final, 
                 target, 
                 features,
                 st.session_state['last_fit']
             )
+            st.session_state['glm_results'] = model_results
+        if 'glm_results' in st.session_state:
+            st.write("### GLM Summary")
+            st.write(st.session_state['glm_results'].summary())
+    
+
+
+    if 'glm_results' in st.session_state and 'rf_results' in st.session_state:
+    
+        st.divider()
+        st.subheader("Model Comparison")
+        
+        
+        if st.button("Perform Model Comparison", type="primary"):
             
-            st.write(model_results.summary())
+            glm_res = st.session_state['glm_results']
+            rf_res = st.session_state['rf_results']
+            
+            if isinstance(rf_res, dict):
+                rf_res_model = rf_res['model']
+            else:
+                rf_res_model = rf_res
+
+            # 1. Compare metrics
+            dist_name = st.session_state['last_fit'].get('name')
+            comp_df = get_model_comparison(glm_res, rf_res_model, df_final, t_col, features, dist_name)
+            
+            st.write("### Performance Metrics")
+            st.table(comp_df.style.format(precision=4))
+                    
+            # 2. Insights: Feature Importance
+            st.subheader("Insights: What drives the model?")
+            col1, col2 = st.columns(2)
+                    
+            with col1:
+                st.write("**GLM Coefficients (P-Values)**")
+                glm_info = pd.DataFrame({
+                    "Coeff": glm_res.params,
+                    "P-Value": glm_res.pvalues
+                })
+                st.dataframe(glm_info.style.highlight_between(
+                    left=0, right=0.05, subset=['P-Value'], color="#124E20"
+                ))
+
+            with col2:
+                st.write("**Random Forest Importance**")
+                
+                if isinstance(rf_res, dict):
+                    importances = pd.Series(rf_res_model.feature_importances_, index=rf_res['used_features'])
+                else:
+                    importances = pd.Series(rf_res_model.feature_importances_, index=features)
+                
+                st.bar_chart(importances.sort_values(ascending=False))
+    
+    
 
 else:
     st.info("Please upload data file.")   
